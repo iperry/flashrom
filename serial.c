@@ -328,6 +328,27 @@ void sp_flush_incoming(void)
 	return;
 }
 
+int sp_set_baud(unsigned int baud)
+{
+    struct termios opts;
+    struct baudentry *entry = (struct baudentry*)sp_baudtable;
+    int found = 0;
+
+    tcgetattr(sp_fd, &opts);
+    while (entry) {
+        if (entry->baud == baud) {
+            msg_pinfo("%s: Changing baud rate to %u\n", __func__, baud);
+            cfsetispeed(&opts, entry->flag);
+            cfsetospeed(&opts, entry->flag);
+            found = 1;
+            break;
+        }
+        entry++;
+    }
+    tcsetattr(sp_fd, TCSANOW, &opts);
+    return !found;
+}
+
 int serialport_shutdown(void *data)
 {
 #ifdef _WIN32

@@ -734,5 +734,6 @@ enum SP_PIN {
 
 void sp_set_pin(enum SP_PIN pin, int val);
 int sp_get_pin(enum SP_PIN pin);
+int sp_set_baud(unsigned int baud);
 
 #endif				/* !__PROGRAMMER_H__ */
