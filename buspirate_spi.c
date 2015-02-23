@@ -57,7 +57,7 @@ static int bp_reset_default(void) {
 	/*
 	 * Find out what mode we're in.
 	 */
-	rc = snprintf((char*)buf, sizeof buf, "\n");
+	rc = snprintf((char*)buf, sizeof buf, " \n");
 	if (!rc) {
 		return 1;
 	}
@@ -66,41 +66,51 @@ static int bp_reset_default(void) {
 		printf("Failed to write...\n");
 		return 1;
 	}
-	rc = serialport_read_nonblock(buf, sizeof buf, TERM_TIMEOUT_MS, NULL);
+	serialport_read_nonblock(buf, sizeof buf, TERM_TIMEOUT_MS, NULL);
 
 	if (memmem((char*)buf, sizeof buf, PROMPT_DEFAULT, sizeof PROMPT_DEFAULT)) {
-		printf("BP in default terminal mode\n");
-	} else {
-		/* Reset the chip if we can. Assume that if we're not in default mode,
-		 * we're either stuck in SPI binary mode or raw bitbang mode, at a
-		 * previously configured higher baud rate. */
-		printf("BP in bitbang mode\n");
-		sp_set_baud(BAUD_FAST);
-
-		for (i = 0; i < 20; i++) {
-			/* Put it back in raw mode (eg if we're in SPI binary mode) */
-			buf[0] = 0x00;
-			serialport_write(buf, 1);
-			memset(buf, 0, sizeof buf);
-			serialport_read_nonblock(buf, sizeof buf, TERM_TIMEOUT_MS, NULL);
-			if (memmem((char*)buf, sizeof buf, PROMPT_BITBANG, sizeof PROMPT_BITBANG)) {
-				response = 1;
-				break;
-			}
-		}
-		if (!response) {
-			msg_perr("Failed to set bus pirate to default state. Replug?\n");
-		}
-
-		/* Now go back to terminal mode (resets the bus pirate) */
-		buf[0] = 0x0F;
-		serialport_write(buf, 1);
-		sp_set_baud(BAUD_DEFAULT);
-		sleep(1);
+		/* We're done here */
+		msg_pdbg("BP in default terminal mode\n");
+		return 0;
 	}
+
+	/* Reset the chip if we can. Assume that if we're not in default mode,
+	 * we're either stuck in SPI binary mode or raw bitbang mode, at a
+	 * previously configured higher baud rate. */
+	msg_pdbg("BP in bitbang mode\n");
+	sp_set_baud(BAUD_FAST);
+
+	/* Send a space */
+	buf[0] = ' ';
+	serialport_write(buf, 1);
+
+	for (i = 0; i < 20; i++) {
+		/* Put it back in raw mode (eg if we're in SPI binary mode) */
+		buf[0] = 0x00;
+		serialport_write(buf, 1);
+		memset(buf, 0, sizeof buf);
+		serialport_read_nonblock(buf, sizeof buf, TERM_TIMEOUT_MS, NULL);
+		/* Should respond with at least one BBIO1 */
+		if (memmem((char*)buf, sizeof buf, PROMPT_BITBANG, sizeof PROMPT_BITBANG)) {
+			response = 1;
+			break;
+		}
+	}
+	if (!response) {
+		msg_perr("Failed to set bus pirate to default state. Replug?\n");
+	}
+
+	/* Now go back to terminal mode (resets the bus pirate) */
+	msg_pdbg("Resetting BP...\n");
+	buf[0] = 0x0F;
+	serialport_write(buf, 1);
+	sp_set_baud(BAUD_DEFAULT);
+	sleep(1);
 
 	return 0;
 }
+
+
 
 #ifndef FAKE_COMMUNICATION
 static int buspirate_serialport_setup(char *dev)
@@ -199,6 +209,66 @@ static int buspirate_wait_for_string(unsigned char *buf, char *key)
 	return ret;
 }
 
+static int bp_highspeed(void) {
+#if 1
+	int ret;
+	unsigned char buf[16];
+
+	ret = snprintf((char*)buf, sizeof buf, "b\n");
+	if (!ret) {
+		return 1;
+	}
+	ret = buspirate_sendrecv(buf, ret, 0);
+	if (ret) {
+		return ret;
+	}
+	ret = buspirate_wait_for_string(buf, ">");
+	if (ret) {
+		return ret;
+	}
+
+	ret = snprintf((char*)buf, sizeof buf, "10\n");
+	if (!ret) {
+		return ret;
+	}
+	ret = buspirate_sendrecv(buf, ret, 0);
+	if (ret) {
+		return ret;
+	}
+	ret = buspirate_wait_for_string(buf, ">");
+	if (ret) {
+		return ret;
+	}
+
+	ret = snprintf((char*)buf, sizeof buf, "1\n");
+	if (!ret) {
+		return ret;
+	}
+	ret = buspirate_sendrecv(buf, ret, 0);
+	if (ret) {
+		return ret;
+	}
+
+	sleep(1);
+	sp_set_baud(BAUD_FAST);
+
+	ret = snprintf((char*)buf, sizeof buf, "  ");
+	if (!ret) {
+		return ret;
+	}
+	ret = buspirate_sendrecv(buf, ret, 0);
+	if (ret) {
+		return ret;
+	}
+	ret = buspirate_wait_for_string(buf, ">");
+	if (ret) {
+		return ret;
+	}
+#endif
+
+	return 0;
+}
+
 static int buspirate_spi_send_command_v1(struct flashctx *flash, unsigned int writecnt, unsigned int readcnt,
 					 const unsigned char *writearr, unsigned char *readarr);
 static int buspirate_spi_send_command_v2(struct flashctx *flash, unsigned int writecnt, unsigned int readcnt,
@@ -280,6 +350,8 @@ int buspirate_spi_init(void)
 	int ret = 0;
 	int pullup = 0;
 
+	printf("%s!!!\n", __func__);
+
 	dev = extract_programmer_param("dev");
 	if (dev && !strlen(dev)) {
 		free(dev);
@@ -341,71 +413,7 @@ int buspirate_spi_init(void)
 		return 1;
 	}
 
-	ret = snprintf((char*)bp_commbuf, DEFAULT_BUFSIZE, "b\n");
-	if (!ret) {
-		return 1;
-	}
-	ret = buspirate_sendrecv(bp_commbuf, ret, 0);
-	if (ret) {
-		return ret;
-	}
-	ret = buspirate_wait_for_string(bp_commbuf, ">");
-	if (ret) {
-		return ret;
-	}
-
-	ret = snprintf((char*)bp_commbuf, DEFAULT_BUFSIZE, "10\n");
-	if (!ret) {
-		return ret;
-	}
-	ret = buspirate_sendrecv(bp_commbuf, ret, 0);
-	if (ret) {
-		return ret;
-	}
-	ret = buspirate_wait_for_string(bp_commbuf, ">");
-	if (ret) {
-		return ret;
-	}
-
-	ret = snprintf((char*)bp_commbuf, DEFAULT_BUFSIZE, "1\n");
-	if (!ret) {
-		return ret;
-	}
-	ret = buspirate_sendrecv(bp_commbuf, ret, 0);
-	if (ret) {
-		return ret;
-	}
-
-	sleep(1);
-	sp_set_baud(BAUD_FAST);
-
-	ret = snprintf((char*)bp_commbuf, DEFAULT_BUFSIZE, "  ");
-	if (!ret) {
-		return ret;
-	}
-	ret = buspirate_sendrecv(bp_commbuf, ret, 0);
-	if (ret) {
-		return ret;
-	}
-	ret = buspirate_wait_for_string(bp_commbuf, ">");
-	if (ret) {
-		return ret;
-	}
-
-	ret = snprintf((char*)bp_commbuf, DEFAULT_BUFSIZE, "i\n");
-	if (!ret) {
-		return ret;
-	}
-	ret = buspirate_sendrecv(bp_commbuf, ret, 0);
-	if (ret) {
-		return ret;
-	}
-	ret = buspirate_wait_for_string(bp_commbuf, "irate");
-	if (ret) {
-		return ret;
-	}
-
-#if 0
+#if 1
 	/* This is the brute force version, but it should work.
 	 * It is likely to fail if a previous flashrom run was aborted during a write with the new SPI commands
 	 * in firmware v5.5 because that firmware may wait for up to 4096 bytes of input before responding to
@@ -505,6 +513,8 @@ int buspirate_spi_init(void)
 		spi_master_buspirate.max_data_write = 12;
 		spi_master_buspirate.command = buspirate_spi_send_command_v1;
 	}
+
+	bp_highspeed();
 
 	/* Workaround for broken speed settings in firmware 6.1 and older. */
 	if (BP_FWVERSION(fw_version_major, fw_version_minor) < BP_FWVERSION(6, 2))
