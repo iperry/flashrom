@@ -17,6 +17,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
  */
 
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <strings.h>
 #include <string.h>
@@ -35,13 +36,82 @@ struct buspirate_spispeeds {
 	const int speed;
 };
 
+#define PROMPT_DEFAULT    "HiZ>"
+#define PROMPT_BITBANG    "BBIO1"
+#define BAUD_DEFAULT      (115200)
+#define BAUD_FAST         (2000000)
+#define TERM_TIMEOUT_MS   (100)
+
+/**
+ * @brief Attempt to return the bus pirate to default 115200 terminal mode. This is needed
+ *  if for some reason a previous run was halted and the BP was left in a binary mode,
+ *  or a different baud rate.
+ */
+static int bp_reset_default(void) {
+	int rc;
+	int i;
+	unsigned char buf[16];
+	int response = 0;
+
+	memset(buf, 0, sizeof buf);
+	/*
+	 * Find out what mode we're in.
+	 */
+	rc = snprintf((char*)buf, sizeof buf, "\n");
+	if (!rc) {
+		return 1;
+	}
+	rc = serialport_write(buf, rc);
+	if (rc) {
+		printf("Failed to write...\n");
+		return 1;
+	}
+	rc = serialport_read_nonblock(buf, sizeof buf, TERM_TIMEOUT_MS, NULL);
+
+	if (memmem((char*)buf, sizeof buf, PROMPT_DEFAULT, sizeof PROMPT_DEFAULT)) {
+		printf("BP in default terminal mode\n");
+	} else {
+		/* Reset the chip if we can. Assume that if we're not in default mode,
+		 * we're either stuck in SPI binary mode or raw bitbang mode, at a
+		 * previously configured higher baud rate. */
+		printf("BP in bitbang mode\n");
+		sp_set_baud(BAUD_FAST);
+
+		for (i = 0; i < 20; i++) {
+			/* Put it back in raw mode (eg if we're in SPI binary mode) */
+			buf[0] = 0x00;
+			serialport_write(buf, 1);
+			memset(buf, 0, sizeof buf);
+			serialport_read_nonblock(buf, sizeof buf, TERM_TIMEOUT_MS, NULL);
+			if (memmem((char*)buf, sizeof buf, PROMPT_BITBANG, sizeof PROMPT_BITBANG)) {
+				response = 1;
+				break;
+			}
+		}
+		if (!response) {
+			msg_perr("Failed to set bus pirate to default state. Replug?\n");
+		}
+
+		/* Now go back to terminal mode (resets the bus pirate) */
+		buf[0] = 0x0F;
+		serialport_write(buf, 1);
+		sp_set_baud(BAUD_DEFAULT);
+		sleep(1);
+	}
+
+	return 0;
+}
+
 #ifndef FAKE_COMMUNICATION
 static int buspirate_serialport_setup(char *dev)
 {
 	/* 115200bps, 8 databits, no parity, 1 stopbit */
-	sp_fd = sp_openserport(dev, 115200);
- 	if (sp_fd == SER_INV_FD)
+	sp_fd = sp_openserport(dev, BAUD_DEFAULT);
+	if (sp_fd == SER_INV_FD) {
 		return 1;
+	}
+
+	bp_reset_default();
 	return 0;
 }
 #else
@@ -271,6 +341,71 @@ int buspirate_spi_init(void)
 		return 1;
 	}
 
+	ret = snprintf((char*)bp_commbuf, DEFAULT_BUFSIZE, "b\n");
+	if (!ret) {
+		return 1;
+	}
+	ret = buspirate_sendrecv(bp_commbuf, ret, 0);
+	if (ret) {
+		return ret;
+	}
+	ret = buspirate_wait_for_string(bp_commbuf, ">");
+	if (ret) {
+		return ret;
+	}
+
+	ret = snprintf((char*)bp_commbuf, DEFAULT_BUFSIZE, "10\n");
+	if (!ret) {
+		return ret;
+	}
+	ret = buspirate_sendrecv(bp_commbuf, ret, 0);
+	if (ret) {
+		return ret;
+	}
+	ret = buspirate_wait_for_string(bp_commbuf, ">");
+	if (ret) {
+		return ret;
+	}
+
+	ret = snprintf((char*)bp_commbuf, DEFAULT_BUFSIZE, "1\n");
+	if (!ret) {
+		return ret;
+	}
+	ret = buspirate_sendrecv(bp_commbuf, ret, 0);
+	if (ret) {
+		return ret;
+	}
+
+	sleep(1);
+	sp_set_baud(BAUD_FAST);
+
+	ret = snprintf((char*)bp_commbuf, DEFAULT_BUFSIZE, "  ");
+	if (!ret) {
+		return ret;
+	}
+	ret = buspirate_sendrecv(bp_commbuf, ret, 0);
+	if (ret) {
+		return ret;
+	}
+	ret = buspirate_wait_for_string(bp_commbuf, ">");
+	if (ret) {
+		return ret;
+	}
+
+	ret = snprintf((char*)bp_commbuf, DEFAULT_BUFSIZE, "i\n");
+	if (!ret) {
+		return ret;
+	}
+	ret = buspirate_sendrecv(bp_commbuf, ret, 0);
+	if (ret) {
+		return ret;
+	}
+	ret = buspirate_wait_for_string(bp_commbuf, "irate");
+	if (ret) {
+		return ret;
+	}
+
+#if 0
 	/* This is the brute force version, but it should work.
 	 * It is likely to fail if a previous flashrom run was aborted during a write with the new SPI commands
 	 * in firmware v5.5 because that firmware may wait for up to 4096 bytes of input before responding to
@@ -304,6 +439,7 @@ int buspirate_spi_init(void)
 		return ret;
 	if ((ret = buspirate_wait_for_string(bp_commbuf, "irate ")))
 		return ret;
+#endif
 	/* Read the hardware version string. Last byte of the buffer is reserved for \0. */
 	for (i = 0; i < DEFAULT_BUFSIZE - 1; i++) {
 		if ((ret = buspirate_sendrecv(bp_commbuf + i, 0, 1)))
@@ -453,6 +589,16 @@ int buspirate_spi_init(void)
 		msg_perr("Protocol error while raising CS#!\n");
 		return 1;
 	}
+
+#if 0
+	unsigned char cmd[] = {
+		0x9f
+	};
+	unsigned char rdbuf[4];
+	unsigned int *id = (unsigned int*)rdbuf;
+	buspirate_spi_send_command_v2(NULL, sizeof cmd, sizeof rdbuf, cmd, rdbuf);
+	printf("rdbuf: %x\n", *id);
+#endif
 
 	register_spi_master(&spi_master_buspirate);
 
