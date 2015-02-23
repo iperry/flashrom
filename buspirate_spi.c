@@ -341,7 +341,7 @@ int buspirate_spi_init(void)
 
 	if ((ret = buspirate_wait_for_string(bp_commbuf, "HiZ>")))
 		return ret;
-	
+
 	/* Tell the user about missing SPI binary mode in firmware 2.3 and older. */
 	if (BP_FWVERSION(fw_version_major, fw_version_minor) < BP_FWVERSION(2, 4)) {
 		msg_pinfo("Bus Pirate firmware 2.3 and older does not support binary SPI access.\n");
@@ -351,7 +351,7 @@ int buspirate_spi_init(void)
 
 	/* Use fast SPI mode in firmware 5.5 and newer. */
 	if (BP_FWVERSION(fw_version_major, fw_version_minor) >= BP_FWVERSION(5, 5)) {
-		msg_pdbg("Using SPI command set v2.\n"); 
+		msg_pdbg("Using SPI command set v2.\n");
 		/* Sensible default buffer size. */
 		if (buspirate_commbuf_grow(260 + 5))
 			return ERROR_OOM;
@@ -378,7 +378,7 @@ int buspirate_spi_init(void)
 			msg_pinfo("It is recommended to upgrade to firmware 6.2 or newer.\n");
 			spispeed = 0x4;
 		}
-		
+
 	/* This works because speeds numbering starts at 0 and is contiguous. */
 	msg_pdbg("SPI speed is %sHz\n", spispeeds[spispeed].name);
 
@@ -433,7 +433,7 @@ int buspirate_spi_init(void)
 		msg_perr("Protocol error while setting SPI speed!\n");
 		return 1;
 	}
-	
+
 	/* Set SPI config: output type, idle, clock edge, sample */
 	bp_commbuf[0] = 0x80 | 0xa;
 	ret = buspirate_sendrecv(bp_commbuf, 1, 1);
@@ -533,7 +533,7 @@ static int buspirate_spi_send_command_v2(struct flashctx *flash, unsigned int wr
 	bp_commbuf[i++] = (readcnt >> 8) & 0xff;
 	bp_commbuf[i++] = readcnt & 0xff;
 	memcpy(bp_commbuf + i, writearr, writecnt);
-	
+
 	ret = buspirate_sendrecv(bp_commbuf, i + writecnt, 1 + readcnt);
 
 	if (ret) {
